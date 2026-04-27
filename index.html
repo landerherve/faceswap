@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FaceSwap">
+<title>FaceSwap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13131a;
+    --surface2: #1c1c28;
+    --border: #2a2a3a;
+    --accent: #e8ff47;
+    --accent2: #ff4757;
+    --text: #f0f0f8;
+    --muted: #6b6b8a;
+    --radius: 16px;
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* SPLASH */
+  #splash {
+    position: fixed; inset: 0; z-index: 1000;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 24px;
+    transition: opacity 0.6s ease;
+  }
+  #splash.hidden { opacity: 0; pointer-events: none; }
+  .splash-logo {
+    font-size: 52px; font-weight: 800; letter-spacing: -2px;
+    background: linear-gradient(135deg, var(--accent) 0%, #a8ff78 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .splash-sub { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; }
+  .splash-bar { width: 200px; height: 3px; background: var(--surface2); border-radius: 99px; overflow: hidden; }
+  .splash-progress { height: 100%; background: var(--accent); border-radius: 99px; width: 0%; transition: width 0.3s ease; }
+  .splash-status { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+
+  /* HEADER */
+  header { padding: 20px 20px 0; display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-size: 22px; font-weight: 800; letter-spacing: -1px; }
+  .logo span { color: var(--accent); }
+  .badge { font-family: 'DM Mono', monospace; font-size: 10px; background: var(--surface2); border: 1px solid var(--border); padding: 4px 10px; border-radius: 99px; color: var(--muted); }
+
+  /* STEPS */
+  .steps { display: flex; gap: 8px; padding: 20px 20px 0; }
+  .step { flex: 1; height: 3px; border-radius: 99px; background: var(--surface2); transition: background 0.3s; }
+  .step.active { background: var(--accent); }
+  .step.done { background: var(--accent); opacity: 0.4; }
+
+  /* MAIN */
+  main { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .section-title { font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+
+  /* CARDS */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+  /* UPLOAD ZONES */
+  .upload-zone {
+    padding: 36px 20px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    cursor: pointer; transition: background 0.2s; position: relative;
+  }
+  .upload-zone:active { background: var(--surface2); }
+  .upload-zone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    /* IMPORTANT: pas de capture, accès fichiers uniquement */
+  }
+  .upload-icon { width: 60px; height: 60px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  .upload-icon.video { background: rgba(232,255,71,0.1); }
+  .upload-icon.face { background: rgba(255,71,87,0.1); }
+  .upload-label { font-size: 17px; font-weight: 700; }
+  .upload-sub { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; text-align: center; line-height: 1.6; }
+
+  /* PREVIEW */
+  .preview-wrap { position: relative; background: #000; }
+  .preview-wrap video, .preview-wrap canvas { width: 100%; display: block; max-height: 280px; object-fit: contain; }
+  .preview-tag { position: absolute; top: 10px; left: 10px; font-family: 'DM Mono', monospace; font-size: 10px; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); padding: 4px 10px; border-radius: 99px; color: var(--accent); }
+  .preview-clear { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 99px; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); border: none; color: var(--text); font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .video-meta { padding: 12px 16px; display: flex; gap: 16px; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+
+  /* FACE GRID */
+  .face-grid { padding: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .face-thumb { width: 78px; height: 78px; border-radius: 14px; overflow: hidden; cursor: pointer; position: relative; border: 2px solid transparent; transition: border-color 0.2s, transform 0.1s; }
+  .face-thumb:active { transform: scale(0.95); }
+  .face-thumb.selected { border-color: var(--accent); }
+  .face-thumb canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .face-thumb .check { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(232,255,71,0.25); font-size: 22px; }
+  .face-thumb.selected .check { display: flex; }
+  .face-empty { padding: 28px 16px; text-align: center; font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); line-height: 1.8; }
+
+  /* SOURCE FACE */
+  .source-face-wrap { padding: 16px; display: flex; align-items: center; gap: 16px; }
+  .source-canvas-wrap { width: 84px; height: 84px; border-radius: 14px; overflow: hidden; flex-shrink: 0; background: var(--surface2); border: 2px solid var(--border); }
+  .source-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
+  .source-info { flex: 1; }
+  .source-info h3 { font-size: 15px; font-weight: 700; }
+  .source-info p { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 4px; }
+
+  /* BUTTONS */
+  .btn { width: 100%; padding: 18px; border: none; border-radius: var(--radius); font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; cursor: pointer; transition: transform 0.1s, opacity 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: 0.35; pointer-events: none; }
+  .btn-primary { background: var(--accent); color: #0a0a0f; }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-danger { background: rgba(255,71,87,0.15); color: var(--accent2); border: 1px solid rgba(255,71,87,0.3); }
+  .btn-sm { padding: 10px 16px; font-size: 13px; width: auto; }
+
+  /* PROCESS */
+  .process-card { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .process-header { display: flex; align-items: center; gap: 14px; }
+  .spinner { width: 34px; height: 34px; border: 3px solid var(--surface2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .process-title { font-size: 16px; font-weight: 700; }
+  .process-sub { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 3px; }
+  .process-bar-wrap { height: 6px; background: var(--surface2); border-radius: 99px; overflow: hidden; }
+  .process-bar { height: 100%; background: var(--accent); border-radius: 99px; width: 0%; transition: width 0.3s ease; }
+  .process-stats { display: flex; gap: 10px; }
+  .stat { flex: 1; padding: 12px 8px; background: var(--surface2); border-radius: 12px; text-align: center; }
+  .stat-val { font-size: 18px; font-weight: 800; color: var(--accent); }
+  .stat-lbl { font-size: 9px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 2px; letter-spacing: 0.5px; }
+
+  /* RESULT */
+  .result-actions { display: flex; gap: 10px; padding: 14px; }
+  .result-actions .btn { flex: 1; padding: 14px; font-size: 14px; }
+
+  /* ALERTS */
+  .alert { padding: 14px 16px; border-radius: 12px; font-size: 13px; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+  .alert.warn { background: rgba(255,165,0,0.1); border: 1px solid rgba(255,165,0,0.3); color: #ffa500; }
+  .alert.info { background: rgba(232,255,71,0.08); border: 1px solid rgba(232,255,71,0.2); color: var(--accent); }
+  .alert.error { background: rgba(255,71,87,0.1); border: 1px solid rgba(255,71,87,0.3); color: var(--accent2); }
+
+  .hidden { display: none !important; }
+  #processingCanvas { position: absolute; top: -9999px; left: -9999px; }
+  #videoEl { position: absolute; top: -9999px; left: -9999px; }
+  .bottom-safe { height: calc(40px + var(--safe-bottom)); }
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="splash-logo">FACESWAP</div>
+  <div class="splash-sub">Chargement IA</div>
+  <div class="splash-bar"><div class="splash-progress" id="splashProgress"></div></div>
+  <div class="splash-status" id="splashStatus">Initialisation...</div>
+</div>
+
+<canvas id="processingCanvas"></canvas>
+<video id="videoEl" playsinline muted></video>
+
+<header>
+  <div class="logo">FACE<span>SWAP</span></div>
+  <div class="badge" id="statusBadge">PRÊT</div>
+</header>
+
+<div class="steps" id="stepsBar">
+  <div class="step active" id="step1"></div>
+  <div class="step" id="step2"></div>
+  <div class="step" id="step3"></div>
+  <div class="step" id="step4"></div>
+</div>
+
+<main>
+
+  <!-- ÉTAPE 1 -->
+  <div id="panel1">
+    <p class="section-title">Étape 1 — Vidéo à modifier</p>
+    <div class="card" id="videoCard">
+      <div class="upload-zone">
+        <input type="file" id="videoInput" accept="video/*">
+        <div class="upload-icon video">🎬</div>
+        <div class="upload-label">Importer une vidéo</div>
+        <div class="upload-sub">Appuie ici pour choisir<br>depuis tes Fichiers ou Photos</div>
+      </div>
+    </div>
+    <div class="alert info">
+      <span>ℹ️</span>
+      <span>MP4 ou MOV. Visage bien éclairé, de face = meilleur résultat.</span>
+    </div>
+  </div>
+
+  <!-- ÉTAPE 2 -->
+  <div id="panel2" class="hidden">
+    <p class="section-title">Étape 2 — Sélectionne le visage à remplacer</p>
+    <div class="card">
+      <div class="preview-wrap">
+        <canvas id="framePreview"></canvas>
+        <div class="preview-tag">FRAME ANALYSÉE</div>
+      </div>
+      <div id="facesContainer">
+        <div class="face-empty">🔍 Analyse en cours...</div>
+      </div>
+    </div>
+    <div class="alert warn hidden" id="noFaceWarn">
+      <span>⚠️</span>
+      <span>Aucun visage détecté sur cette frame. Essaie de relancer la détection sur une autre partie de la vidéo.</span>
+    </div>
+    <button class="btn btn-secondary hidden" id="btnRetryDetect">🔄 Analyser une autre frame</button>
+  </div>
+
+  <!-- ÉTAPE 3 -->
+  <div id="panel3" class="hidden">
+    <p class="section-title">Étape 3 — Photo du visage de remplacement</p>
+    <div class="card" id="sourceFaceCard">
+      <div class="upload-zone">
+        <input type="file" id="sourceFaceInput" accept="image/*">
+        <div class="upload-icon face">🤳</div>
+        <div class="upload-label">Importer une photo</div>
+        <div class="upload-sub">Appuie ici pour choisir<br>depuis tes Fichiers ou Photos</div>
+      </div>
+    </div>
+    <div class="alert info">
+      <span>ℹ️</span>
+      <span>Selfie de face, fond neutre, bon éclairage = swap propre.</span>
+    </div>
+  </div>
+
+  <!-- ÉTAPE 4 -->
+  <div id="panel4" class="hidden">
+    <p class="section-title">Étape 4 — Traitement en cours</p>
+    <div class="card process-card">
+      <div class="process-header">
+        <div class="spinner" id="processSpinner"></div>
+        <div>
+          <div class="process-title" id="processTitle">Démarrage...</div>
+          <div class="process-sub" id="processSub">Préparation des frames</div>
+        </div>
+      </div>
+      <div class="process-bar-wrap">
+        <div class="process-bar" id="processBar"></div>
+      </div>
+      <div class="process-stats">
+        <div class="stat"><div class="stat-val" id="statFrames">0</div><div class="stat-lbl">FRAMES</div></div>
+        <div class="stat"><div class="stat-val" id="statFPS">–</div><div class="stat-lbl">FPS</div></div>
+        <div class="stat"><div class="stat-val" id="statETA">–</div><div class="stat-lbl">RESTANT</div></div>
+      </div>
+    </div>
+    <div class="alert warn">
+      <span>⚡</span>
+      <span>Traitement frame par frame dans le navigateur. Plusieurs minutes pour une vidéo longue — garde l'écran allumé.</span>
+    </div>
+  </div>
+
+  <!-- RÉSULTAT -->
+  <div id="panelResult" class="hidden">
+    <p class="section-title">✅ Résultat</p>
+    <div class="card">
+      <div class="preview-wrap">
+        <video id="resultVideo" controls playsinline style="width:100%;max-height:340px;display:block;"></video>
+        <div class="preview-tag">TRAITÉ</div>
+      </div>
+      <div class="result-actions">
+        <button class="btn btn-primary" id="saveBtn">💾 Télécharger</button>
+        <button class="btn btn-secondary" id="restartBtn">🔄 Recommencer</button>
+      </div>
+    </div>
+    <div class="alert info">
+      <span>💡</span>
+      <span>Après téléchargement, le fichier .webm sera dans tes Fichiers. VLC sur iPhone peut le lire.</span>
+    </div>
+  </div>
+
+  <!-- NAVIGATION -->
+  <div id="navButtons" style="display:flex;flex-direction:column;gap:10px;">
+    <button class="btn btn-primary hidden" id="btnDetect">🔍 Détecter les visages</button>
+    <button class="btn btn-primary hidden" id="btnConfirmFace">✅ Confirmer ce visage</button>
+    <button class="btn btn-primary hidden" id="btnStartProcess">🚀 Lancer le face swap</button>
+    <button class="btn btn-danger hidden" id="btnCancelProcess">✕ Annuler le traitement</button>
+  </div>
+
+  <div class="bottom-safe"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+const state = {
+  videoFile: null, videoURL: null,
+  videoDuration: 0, videoWidth: 0, videoHeight: 0,
+  detectedFaces: [], selectedFaceIndex: -1,
+  sourceFaceFile: null, sourceFaceImage: null, sourceFaceLandmarks: null,
+  processing: false, cancelled: false,
+  frames: [], totalFrames: 0,
+  detectAtTime: 1.0,
+};
+
+// ── MODELS ──
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+
+async function loadModels() {
+  const models = [
+    { label: 'Détecteur de visages...', fn: () => faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL) },
+    { label: 'Landmarks faciaux...', fn: () => faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL) },
+    { label: 'Reconnaissance...', fn: () => faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL) },
+  ];
+  for (let i = 0; i < models.length; i++) {
+    $('splashStatus').textContent = models[i].label;
+    $('splashProgress').style.width = `${(i / models.length) * 100}%`;
+    await models[i].fn();
+  }
+  $('splashProgress').style.width = '100%';
+  $('splashStatus').textContent = 'Modèles chargés ✓';
+  await sleep(500);
+  $('splash').classList.add('hidden');
+}
+
+// ── STEPS ──
+function goStep(n) {
+  [1,2,3,4].forEach(i => {
+    $(`panel${i}`).classList.toggle('hidden', i !== n);
+    const s = $(`step${i}`);
+    s.className = 'step' + (i < n ? ' done' : i === n ? ' active' : '');
+  });
+  $('panelResult').classList.add('hidden');
+  ['btnDetect','btnConfirmFace','btnStartProcess','btnCancelProcess'].forEach(b => $(b).classList.add('hidden'));
+}
+
+function showResult() {
+  [1,2,3,4].forEach(i => $(`panel${i}`).classList.add('hidden'));
+  $('panelResult').classList.remove('hidden');
+  ['btnDetect','btnConfirmFace','btnStartProcess','btnCancelProcess'].forEach(b => $(b).classList.add('hidden'));
+}
+
+// ── STEP 1 : VIDEO ──
+function bindVideoInput() {
+  $('videoInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    state.videoFile = file;
+    state.videoURL = URL.createObjectURL(file);
+
+    const vid = $('videoEl');
+    vid.src = state.videoURL;
+    await new Promise(r => { vid.onloadedmetadata = r; });
+    state.videoDuration = vid.duration;
+    state.videoWidth = vid.videoWidth;
+    state.videoHeight = vid.videoHeight;
+
+    $('videoCard').innerHTML = `
+      <div class="preview-wrap">
+        <video src="${state.videoURL}" controls playsinline style="width:100%;max-height:240px;display:block;"></video>
+        <div class="preview-tag">VIDÉO CHARGÉE</div>
+        <button class="preview-clear" id="clearVideoBtn">✕</button>
+      </div>
+      <div class="video-meta">
+        <span>⏱ ${fmtDur(state.videoDuration)}</span>
+        <span>📐 ${state.videoWidth}×${state.videoHeight}</span>
+        <span>📁 ${fmtSize(file.size)}</span>
+      </div>`;
+    $('clearVideoBtn').addEventListener('click', clearVideo);
+    $('btnDetect').classList.remove('hidden');
+  });
+}
+
+function clearVideo() {
+  state.videoFile = null; state.videoURL = null;
+  $('videoCard').innerHTML = `
+    <div class="upload-zone">
+      <input type="file" id="videoInput" accept="video/*">
+      <div class="upload-icon video">🎬</div>
+      <div class="upload-label">Importer une vidéo</div>
+      <div class="upload-sub">Appuie ici pour choisir<br>depuis tes Fichiers ou Photos</div>
+    </div>`;
+  bindVideoInput();
+  $('btnDetect').classList.add('hidden');
+}
+
+$('btnDetect').addEventListener('click', async () => {
+  goStep(2);
+  await detectFaces();
+});
+
+// ── STEP 2 : DETECT ──
+async function detectFaces() {
+  $('facesContainer').innerHTML = '<div class="face-empty">🔍 Analyse en cours...</div>';
+  $('noFaceWarn').classList.add('hidden');
+  $('btnRetryDetect').classList.add('hidden');
+
+  const vid = $('videoEl');
+  vid.src = state.videoURL;
+  const t = Math.min(state.detectAtTime, state.videoDuration - 0.1);
+  vid.currentTime = t;
+  await new Promise(r => { vid.onseeked = r; });
+
+  const preview = $('framePreview');
+  const scale = Math.min(1, 500 / state.videoWidth);
+  preview.width = state.videoWidth * scale;
+  preview.height = state.videoHeight * scale;
+  const ctx = preview.getContext('2d');
+  ctx.drawImage(vid, 0, 0, preview.width, preview.height);
+
+  const detections = await faceapi
+    .detectAllFaces(preview, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+    .withFaceLandmarks();
+
+  state.detectedFaces = detections;
+
+  if (detections.length === 0) {
+    $('facesContainer').innerHTML = '<div class="face-empty">😶 Aucun visage détecté<br><small>Essaie une autre partie de la vidéo</small></div>';
+    $('noFaceWarn').classList.remove('hidden');
+    $('btnRetryDetect').classList.remove('hidden');
+    return;
+  }
+
+  // Draw detection boxes
+  detections.forEach(d => {
+    const b = d.detection.box;
+    ctx.strokeStyle = '#e8ff47';
+    ctx.lineWidth = 2 / scale;
+    ctx.strokeRect(b.x, b.y, b.width, b.height);
+  });
+
+  $('facesContainer').innerHTML = `
+    <div style="padding:12px 16px 4px;font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);">
+      ${detections.length} visage${detections.length > 1 ? 's' : ''} détecté${detections.length > 1 ? 's' : ''} — appuie pour sélectionner
+    </div>
+    <div class="face-grid" id="faceGrid"></div>`;
+
+  detections.forEach((det, i) => {
+    const box = det.detection.box;
+    const pad = Math.min(box.width, box.height) * 0.3;
+    const sx = Math.max(0, (box.x - pad) / scale);
+    const sy = Math.max(0, (box.y - pad) / scale);
+    const sw = Math.min(state.videoWidth - sx, (box.width + pad*2) / scale);
+    const sh = Math.min(state.videoHeight - sy, (box.height + pad*2) / scale);
+
+    const fc = document.createElement('div');
+    fc.className = 'face-thumb';
+
+    const thumbCanvas = document.createElement('canvas');
+    thumbCanvas.width = 78; thumbCanvas.height = 78;
+    const tctx = thumbCanvas.getContext('2d');
+    tctx.drawImage($('videoEl'), sx, sy, sw, sh, 0, 0, 78, 78);
+
+    const check = document.createElement('div');
+    check.className = 'check';
+    check.textContent = '✓';
+
+    fc.appendChild(thumbCanvas);
+    fc.appendChild(check);
+    fc.addEventListener('click', () => {
+      document.querySelectorAll('.face-thumb').forEach(t => t.classList.remove('selected'));
+      fc.classList.add('selected');
+      state.selectedFaceIndex = i;
+      state.targetFaceLandmarks = det.landmarks;
+      $('btnConfirmFace').classList.remove('hidden');
+    });
+    $('faceGrid').appendChild(fc);
+  });
+}
+
+$('btnRetryDetect').addEventListener('click', () => {
+  state.detectAtTime = Math.random() * state.videoDuration;
+  detectFaces();
+});
+
+$('btnConfirmFace').addEventListener('click', () => goStep(3));
+
+// ── STEP 3 : SOURCE FACE ──
+function bindSourceFaceInput() {
+  $('sourceFaceInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    state.sourceFaceFile = file;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = url;
+    await new Promise(r => { img.onload = r; });
+    state.sourceFaceImage = img;
+
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = img.width; tmpCanvas.height = img.height;
+    tmpCanvas.getContext('2d').drawImage(img, 0, 0);
+
+    const det = await faceapi
+      .detectSingleFace(tmpCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
+      .withFaceLandmarks();
+
+    if (!det) {
+      $('sourceFaceCard').innerHTML = `
+        <div class="upload-zone">
+          <input type="file" id="sourceFaceInput" accept="image/*">
+          <div class="upload-icon face">😶</div>
+          <div class="upload-label">Aucun visage détecté</div>
+          <div class="upload-sub">Essaie une autre photo<br>plus lumineuse et de face</div>
+        </div>`;
+      bindSourceFaceInput();
+      return;
+    }
+
+    state.sourceFaceLandmarks = det.landmarks;
+    const box = det.detection.box;
+
+    $('sourceFaceCard').innerHTML = `
+      <div class="source-face-wrap">
+        <div class="source-canvas-wrap"><canvas id="srcThumb"></canvas></div>
+        <div class="source-info">
+          <h3>Visage détecté ✓</h3>
+          <p>${Math.round(det.detection.score * 100)}% confiance</p>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="clearSrcBtn">Changer</button>
+      </div>`;
+
+    const thumb = $('srcThumb');
+    thumb.width = 84; thumb.height = 84;
+    const tctx = thumb.getContext('2d');
+    const pad = Math.min(box.width, box.height) * 0.3;
+    tctx.drawImage(img, box.x - pad, box.y - pad, box.width + pad*2, box.height + pad*2, 0, 0, 84, 84);
+
+    $('clearSrcBtn').addEventListener('click', () => {
+      $('sourceFaceCard').innerHTML = `
+        <div class="upload-zone">
+          <input type="file" id="sourceFaceInput" accept="image/*">
+          <div class="upload-icon face">🤳</div>
+          <div class="upload-label">Importer une photo</div>
+          <div class="upload-sub">Appuie ici pour choisir<br>depuis tes Fichiers ou Photos</div>
+        </div>`;
+      bindSourceFaceInput();
+      $('btnStartProcess').classList.add('hidden');
+    });
+
+    $('btnStartProcess').classList.remove('hidden');
+  });
+}
+
+$('btnStartProcess').addEventListener('click', () => {
+  goStep(4);
+  startProcessing();
+});
+
+// ── PROCESSING ──
+async function startProcessing() {
+  state.processing = true; state.cancelled = false; state.frames = [];
+  $('btnCancelProcess').classList.remove('hidden');
+
+  const vid = $('videoEl');
+  vid.src = state.videoURL;
+  await new Promise(r => { vid.onloadedmetadata = r; });
+
+  const fps = 12;
+  state.totalFrames = Math.floor(state.videoDuration * fps);
+
+  const canvas = $('processingCanvas');
+  canvas.width = state.videoWidth;
+  canvas.height = state.videoHeight;
+  const ctx = canvas.getContext('2d');
+
+  const startTime = Date.now();
+  let processed = 0;
+
+  for (let i = 0; i < state.totalFrames; i++) {
+    if (state.cancelled) break;
+
+    vid.currentTime = i / fps;
+    await new Promise(r => { vid.onseeked = r; });
+    ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+
+    try {
+      const dets = await faceapi
+        .detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+        .withFaceLandmarks();
+
+      if (dets.length > 0) {
+        const target = findClosest(dets, state.detectedFaces[state.selectedFaceIndex]);
+        if (target) swapFace(ctx, target);
+      }
+    } catch(e) {}
+
+    state.frames.push(canvas.toDataURL('image/jpeg', 0.82));
+    processed++;
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    const fpsProc = processed / elapsed;
+    const eta = (state.totalFrames - processed) / Math.max(fpsProc, 0.01);
+    const pct = processed / state.totalFrames;
+
+    $('processBar').style.width = `${pct * 100}%`;
+    $('statFrames').textContent = processed;
+    $('statFPS').textContent = fpsProc.toFixed(1);
+    $('statETA').textContent = fmtDur(eta);
+    $('processTitle').textContent = `Frame ${processed} / ${state.totalFrames}`;
+    $('processSub').textContent = `${Math.round(pct * 100)}% complété`;
+    $('statusBadge').textContent = `${Math.round(pct * 100)}%`;
+
+    if (i % 4 === 0) await sleep(1);
+  }
+
+  if (!state.cancelled) {
+    $('processTitle').textContent = 'Encodage vidéo...';
+    $('processSub').textContent = 'Assemblage final';
+    await sleep(200);
+    await encodeVideo(fps);
+  } else {
+    $('statusBadge').textContent = 'ANNULÉ';
+    $('btnCancelProcess').classList.add('hidden');
+  }
+}
+
+function findClosest(dets, ref) {
+  if (!ref) return dets[0];
+  const rb = ref.detection.box;
+  const rcx = rb.x + rb.width/2, rcy = rb.y + rb.height/2;
+  return dets.reduce((best, d) => {
+    const b = d.detection.box;
+    const dist = Math.hypot(b.x + b.width/2 - rcx, b.y + b.height/2 - rcy);
+    return dist < Math.hypot(best.detection.box.x + best.detection.box.width/2 - rcx, best.detection.box.y + best.detection.box.height/2 - rcy) ? d : best;
+  });
+}
+
+function swapFace(ctx, targetDet) {
+  const box = targetDet.detection.box;
+  const srcImg = state.sourceFaceImage;
+  const srcLM = state.sourceFaceLandmarks;
+
+  // Source bounds
+  const sPts = srcLM.positions;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  sPts.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+  const sw = maxX - minX, sh = maxY - minY;
+
+  const cx = box.x + box.width/2;
+  const cy = box.y + box.height/2;
+  const rx = box.width / 2 * 1.08;
+  const ry = box.height / 2 * 1.12;
+
+  // Offscreen: draw source face scaled to target size
+  const tmp = document.createElement('canvas');
+  tmp.width = box.width + 60; tmp.height = box.height + 60;
+  const tCtx = tmp.getContext('2d');
+  const scaleX = tmp.width / (sw + 60);
+  const scaleY = tmp.height / (sh + 60);
+  tCtx.save();
+  tCtx.scale(scaleX, scaleY);
+  tCtx.drawImage(srcImg, minX - 30, minY - 30, sw + 60, sh + 60, 0, 0, sw + 60, sh + 60);
+  tCtx.restore();
+
+  // Clip ellipse and draw
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(tmp, 0, 0, tmp.width, tmp.height, box.x - 30, box.y - 30, box.width + 60, box.height + 60);
+  ctx.restore();
+
+  // Feather edges
+  ctx.save();
+  const grad = ctx.createRadialGradient(cx, cy, rx * 0.55, cx, cy, rx * 1.08);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,1)');
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx * 1.08, ry * 1.12, 0, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.restore();
+}
+
+// ── ENCODE ──
+async function encodeVideo(fps) {
+  const out = document.createElement('canvas');
+  out.width = state.videoWidth; out.height = state.videoHeight;
+  const octx = out.getContext('2d');
+
+  const stream = out.captureStream(fps);
+  let mime = ['video/webm;codecs=vp9','video/webm','video/mp4'].find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5000000 });
+  const chunks = [];
+  rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  const done = new Promise(r => { rec.onstop = r; });
+  rec.start();
+
+  for (let i = 0; i < state.frames.length; i++) {
+    const img = new Image();
+    img.src = state.frames[i];
+    await new Promise(r => { img.onload = r; });
+    octx.drawImage(img, 0, 0);
+    await sleep(1000 / fps);
+    if (i % 10 === 0) {
+      const pct = Math.round((i / state.frames.length) * 100);
+      $('processTitle').textContent = `Encodage ${pct}%`;
+    }
+  }
+
+  rec.stop();
+  await done;
+
+  const blob = new Blob(chunks, { type: mime });
+  const url = URL.createObjectURL(blob);
+  $('resultVideo').src = url;
+  $('statusBadge').textContent = 'DONE ✓';
+  $('btnCancelProcess').classList.add('hidden');
+
+  $('saveBtn').onclick = () => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `faceswap_${Date.now()}.webm`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  showResult();
+}
+
+$('btnCancelProcess').addEventListener('click', () => {
+  state.cancelled = true; state.processing = false;
+});
+
+$('restartBtn').addEventListener('click', () => location.reload());
+
+// ── UTILS ──
+function fmtDur(s) {
+  if (!isFinite(s) || s < 0) return '–';
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return m > 0 ? `${m}m${String(sec).padStart(2,'0')}s` : `${sec}s`;
+}
+function fmtSize(b) {
+  return b < 1048576 ? `${(b/1024).toFixed(0)}KB` : `${(b/1048576).toFixed(1)}MB`;
+}
+
+// ── INIT ──
+bindVideoInput();
+bindSourceFaceInput();
+loadModels().catch(err => {
+  $('splashStatus').textContent = '❌ Erreur réseau — vérifie ta connexion';
+  console.error(err);
+});
+</script>
+</body>
+</html>
